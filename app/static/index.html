@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>冲压机冲次声音核对</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2230; --line: #2b3648;
+    --text: #e6edf3; --muted: #8b98a9;
+    --ok: #2ecc71; --warn: #f39c12; --bad: #e74c3c; --info: #4aa8ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header { padding: 20px 28px 12px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 20px;
+  }
+  .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .upload-box label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .upload-box .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  input[type=file] {
+    width: 100%; padding: 10px; background: var(--bg);
+    border: 1px dashed var(--line); border-radius: 8px; color: var(--muted);
+  }
+  button {
+    background: var(--info); color: #08131f; border: 0; border-radius: 8px;
+    padding: 11px 26px; font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+  #error {
+    display: none; background: #3a1d22; border: 1px solid var(--bad);
+    color: #ffb4ab; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;
+  }
+  .verdict { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    font-weight: 700; font-size: 13px;
+  }
+  .badge.ok { background: rgba(46,204,113,.15); color: var(--ok); border: 1px solid var(--ok); }
+  .badge.defect { background: rgba(231,76,60,.15); color: var(--bad); border: 1px solid var(--bad); }
+  .badge.ambiguous { background: rgba(243,156,18,.15); color: var(--warn); border: 1px solid var(--warn); }
+  .stats { display: flex; gap: 22px; flex-wrap: wrap; color: var(--muted); }
+  .stats b { color: var(--text); font-size: 16px; }
+  .ambiguous-banner {
+    margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+    background: rgba(243,156,18,.12); border: 1px solid var(--warn); color: #ffce85;
+  }
+  .warnings { margin: 10px 0 0; padding-left: 18px; color: var(--muted); }
+  .warnings li { margin: 2px 0; }
+  h3 { margin: 0 0 10px; font-size: 15px; }
+  .track-wrap { margin-bottom: 8px; }
+  canvas {
+    width: 100%; height: 96px; display: block; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  }
+  audio { width: 100%; margin-top: 8px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px;
+    border-radius: 2px; margin-right: 5px; vertical-align: -1px;
+  }
+  .lg-match::before { background: var(--ok); }
+  .lg-miss::before { background: var(--bad); }
+  .lg-extra::before { background: var(--warn); }
+  .lg-cursor::before { background: var(--info); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.time-link { color: var(--info); cursor: pointer; text-decoration: underline dotted; }
+  .empty { color: var(--muted); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 820px) { .upload-grid, .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>冲压机冲次声音核对</h1>
+  <p>上传正常循环与待检循环录音（16 kHz / 16-bit PCM / 单声道 WAV，≤ 8 秒），系统按参考节奏自动核对漏冲与多冲。点击波形或表格时刻可定位播放。</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="upload-grid">
+      <div class="upload-box">
+        <label for="refFile">正常循环参考录音（4～8 次清晰冲击，相邻 ≥150ms）</label>
+        <input id="refFile" type="file" accept=".wav,audio/wav" />
+        <div class="hint" id="refHint"></div>
+      </div>
+      <div class="upload-box">
+        <label for="testFile">待检循环录音（可有起始静音、响度变化、漏冲/多冲）</label>
+        <input id="testFile" type="file" accept=".wav,audio/wav" />
+        <div class="hint" id="testHint"></div>
+      </div>
+    </div>
+    <div class="row">
+      <button id="submitBtn" disabled>开始核对</button>
+      <span id="busy" class="empty" style="display:none">分析中…</span>
+    </div>
+  </section>
+
+  <div id="error"></div>
+
+  <section id="resultPanel" class="panel" style="display:none">
+    <div class="verdict">
+      <h2 style="margin:0;font-size:17px">核对结论</h2>
+      <span id="verdictBadge" class="badge ok"></span>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div id="ambiguousBanner" class="ambiguous-banner" style="display:none">
+      ⚠ 存在多种同样符合节奏与最少漏冲/多冲规则的冲次归属，系统不做武断放行，<b>请值班员人工复听确认</b>。
+    </div>
+    <ul class="warnings" id="warnings"></ul>
+  </section>
+
+  <section id="tracksPanel" class="panel" style="display:none">
+    <div class="two-col">
+      <div>
+        <h3>参考录音波形（绿=已匹配，红=漏冲参考位置）</h3>
+        <div class="track-wrap">
+          <canvas id="refCanvas"></canvas>
+          <audio id="refAudio" controls preload="metadata"></audio>
+        </div>
+      </div>
+      <div>
+        <h3>待检录音波形（绿=已匹配，橙=多冲）</h3>
+        <div class="track-wrap">
+          <canvas id="testCanvas"></canvas>
+          <audio id="testAudio" controls preload="metadata"></audio>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      <span class="lg-match">匹配冲次</span>
+      <span class="lg-miss">漏冲（参考冲次）</span>
+      <span class="lg-extra">多冲（实录时刻）</span>
+      <span class="lg-cursor">播放位置（点击波形定位）</span>
+    </div>
+  </section>
+
+  <section id="detailPanel" class="panel" style="display:none">
+    <div class="two-col">
+      <div>
+        <h3>漏冲明细 — 对应参考冲次</h3>
+        <table id="missTable">
+          <thead><tr><th>参考冲次序号</th><th>参考时刻 (s)</th><th>待检中预计时刻 (s)</th><th>定位</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div>
+        <h3>多冲明细 — 实录时刻</h3>
+        <table id="extraTable">
+          <thead><tr><th>待检冲次序号</th><th>实录时刻 (s)</th><th>定位</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <p class="empty" style="margin-top:14px">说明：每次漏冲只标注对应参考冲次，后续冲次按参考序号继续对齐，不会整体错位；40ms 内回声已在检测阶段剔除，不计多冲。</p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { result: null, refPeaks: null, testPeaks: null };
+
+const VERDICT_TEXT = {
+  ok: "✓ 循环正常，未发现漏冲/多冲",
+  defect: "✗ 发现漏冲或多冲",
+  ambiguous: "⚠ 归属存在歧义，需人工复听",
+};
+
+$("refFile").addEventListener("change", () => {
+  $("refHint").textContent = $("refFile").files[0]?.name ?? "";
+  refreshBtn();
+});
+$("testFile").addEventListener("change", () => {
+  $("testHint").textContent = $("testFile").files[0]?.name ?? "";
+  refreshBtn();
+});
+function refreshBtn() {
+  $("submitBtn").disabled = !($("refFile").files[0] && $("testFile").files[0]);
+}
+
+$("submitBtn").addEventListener("click", async () => {
+  const fd = new FormData();
+  fd.append("reference", $("refFile").files[0]);
+  fd.append("test", $("testFile").files[0]);
+  $("error").style.display = "none";
+  $("busy").style.display = "inline";
+  $("submitBtn").disabled = true;
+  try {
+    const resp = await fetch("/api/inspect", { method: "POST", body: fd });
+    const payload = await resp.json();
+    if (!resp.ok) {
+      showError(payload.detail || "分析失败");
+      return;
+    }
+    state.result = payload;
+    render(payload);
+  } catch (e) {
+    showError("请求失败：" + e.message);
+  } finally {
+    $("busy").style.display = "none";
+    refreshBtn();
+  }
+});
+
+function showError(msg) {
+  const el = $("error");
+  el.textContent = "✗ " + msg + "（上一次有效结果仍保留在下方，未被覆盖）";
+  el.style.display = "block";
+  if (state.result) render(state.result);
+}
+
+function render(r) {
+  $("resultPanel").style.display = "block";
+  $("tracksPanel").style.display = "block";
+  $("detailPanel").style.display = "block";
+
+  const badge = $("verdictBadge");
+  badge.className = "badge " + r.verdict;
+  badge.textContent = VERDICT_TEXT[r.verdict] || r.verdict;
+
+  const s = r.summary;
+  $("stats").innerHTML = [
+    ["参考冲次", s.reference_impact_count],
+    ["待检冲次", s.test_impact_count],
+    ["匹配", s.matched_count],
+    ["漏冲", s.miss_count],
+    ["多冲", s.extra_count],
+    ["回声抑制", s.suppressed_echo_count],
+  ].map(([k, v]) => `<span>${k}：<b>${v}</b></span>`).join("");
+
+  $("ambiguousBanner").style.display = r.ambiguous ? "block" : "none";
+  $("warnings").innerHTML = (r.warnings || []).map((w) => `<li>${w}</li>`).join("");
+
+  $("refAudio").src = r.reference.url + "?t=" + r.id;
+  $("testAudio").src = r.test.url + "?t=" + r.id;
+
+  loadPeaks(r.reference.url, r.reference.duration, "refCanvas", "refAudio",
+    r.reference.impacts,
+    r.missed.map((m) => ({ time: m.ref_time, kind: "miss" })));
+  loadPeaks(r.test.url, r.test.duration, "testCanvas", "testAudio",
+    r.test.impacts,
+    r.extras.map((e) => ({ time: e.time, kind: "extra" })));
+
+  const missBody = $("missTable").querySelector("tbody");
+  missBody.innerHTML = r.missed.length ? r.missed.map((m) => `
+    <tr>
+      <td>第 ${m.ref_index + 1} 冲</td>
+      <td>${m.ref_time.toFixed(3)}</td>
+      <td>${m.expected_time.toFixed(3)}</td>
+      <td class="time-link" data-seek="test:${m.expected_time}">待检定位 ▶</td>
+    </tr>`).join("") : `<tr><td colspan="4" class="empty">无漏冲</td></tr>`;
+
+  const extraBody = $("extraTable").querySelector("tbody");
+  extraBody.innerHTML = r.extras.length ? r.extras.map((e) => `
+    <tr>
+      <td>第 ${e.test_index + 1} 个</td>
+      <td>${e.time.toFixed(3)}</td>
+      <td class="time-link" data-seek="test:${e.time}">定位播放 ▶</td>
+    </tr>`).join("") : `<tr><td colspan="3" class="empty">无多冲</td></tr>`;
+
+  document.querySelectorAll("[data-seek]").forEach((td) => {
+    td.addEventListener("click", () => {
+      const [, t] = td.dataset.seek.split(":");
+      seekAndPlay($("testAudio"), parseFloat(t));
+    });
+  });
+}
+
+function seekAndPlay(audio, t) {
+  audio.currentTime = Math.max(0, t - 0.05);
+  audio.play().catch(() => {});
+}
+
+// ---- 极简 16-bit 单声道 PCM WAV 解码（后端已保证格式） ----
+async function decodeWav(url) {
+  const buf = await fetch(url).then((x) => x.arrayBuffer());
+  const view = new DataView(buf);
+  let offset = 12;
+  while (offset < view.byteLength - 8) {
+    const id = String.fromCharCode(...new Uint8Array(buf, offset, 4));
+    const size = view.getUint32(offset + 4, true);
+    if (id === "data") {
+      const pcm = new Int16Array(buf, offset + 8, Math.floor(size / 2));
+      return new Float32Array(pcm).map((v) => v / 32768);
+    }
+    offset += 8 + size + (size % 2);
+  }
+  throw new Error("WAV 中未找到 data 块");
+}
+
+function drawWave(canvas, samples, duration, impacts, extraMarkers, cursorTime) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  canvas.width = cssW * dpr;
+  canvas.height = 96 * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = cssW, H = 96;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#0f1419";
+  ctx.fillRect(0, 0, W, H);
+
+  const n = samples.length;
+  const bars = Math.max(60, Math.min(W, 600));
+  const step = Math.max(1, Math.floor(n / bars));
+  ctx.strokeStyle = "#3d4c63";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let b = 0; b < bars; b++) {
+    let mx = 0;
+    for (let i = b * step; i < Math.min(n, (b + 1) * step); i++) {
+      const v = Math.abs(samples[i]);
+      if (v > mx) mx = v;
+    }
+    const x = (b / bars) * W;
+    const h = Math.max(1, mx * H * 0.9);
+    ctx.moveTo(x, H / 2 - h / 2);
+    ctx.lineTo(x, H / 2 + h / 2);
+  }
+  ctx.stroke();
+
+  const xOf = (t) => (duration > 0 ? (t / duration) * W : 0);
+
+  // 漏冲（参考侧）/多冲（待检侧）标记：贯穿竖线
+  for (const m of extraMarkers || []) {
+    const color = m.kind === "miss" ? "#e74c3c" : "#f39c12";
+    const x = xOf(m.time);
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 4); ctx.lineTo(x, H - 4); ctx.stroke();
+  }
+  // 每个检测到的冲次：匹配绿、多冲橙、未匹配（参考漏冲）红
+  for (const imp of impacts || []) {
+    const x = xOf(imp.time);
+    let color = "#2ecc71";
+    if (imp.is_extra) color = "#f39c12";
+    else if (imp.matched === false) color = "#e74c3c";
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x, H - 10); ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, 10, 3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  if (cursorTime != null && cursorTime >= 0) {
+    const x = xOf(cursorTime);
+    ctx.strokeStyle = "#4aa8ff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+}
+
+function bindCanvas(canvas, audio, duration) {
+  canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    seekAndPlay(audio, ratio * duration);
+  };
+}
+
+async function loadPeaks(url, duration, canvasId, audioId, impacts, extraMarkers) {
+  const canvas = $(canvasId);
+  const audio = $(audioId);
+  const samples = await decodeWav(url);
+  const redraw = (cursorTime) =>
+    drawWave(canvas, samples, duration, impacts, extraMarkers, cursorTime);
+  redraw(0);
+  bindCanvas(canvas, audio, duration);
+  let raf = null;
+  const loop = () => {
+    raf = null;
+    redraw(audio.currentTime || 0);
+    if (!audio.paused) raf = requestAnimationFrame(loop);
+  };
+  audio.addEventListener("play", () => {
+    if (raf == null) raf = requestAnimationFrame(loop);
+  });
+  audio.addEventListener("seeked", () => redraw(audio.currentTime || 0));
+  audio.addEventListener("pause", () => redraw(audio.currentTime || 0));
+}
+
+// 进入页面时尝试恢复上一次有效结果
+(async () => {
+  try {
+    const resp = await fetch("/api/result/last");
+    if (resp.ok) {
+      const r = await resp.json();
+      state.result = r;
+      render(r);
+    }
+  } catch (_) { /* 首次访问无结果，忽略 */ }
+})();
+</script>
+</body>
+</html>

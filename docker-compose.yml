@@ -1,0 +1,12 @@
+services:
+  press-audio-check:
+    build: .
+    container_name: press-audio-check
+    ports:
+      - "8000:8000"
+    volumes:
+      - press-data:/data
+    restart: unless-stopped
+
+volumes:
+  press-data:
