@@ -78,13 +78,45 @@
   td.time-link { color: var(--info); cursor: pointer; text-decoration: underline dotted; }
   .empty { color: var(--muted); }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  @media (max-width: 820px) { .upload-grid, .two-col { grid-template-columns: 1fr; } }
+  .compare-canvas { height: 84px; cursor: crosshair; }
+  .mode-row { display: flex; gap: 8px; margin: 10px 0 8px; flex-wrap: wrap; }
+  .mode-btn {
+    background: transparent; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+  }
+  .mode-btn.active { color: var(--info); border-color: var(--info); background: rgba(74,168,255,.12); }
+  .mode-btn.impact.active { color: var(--bad); border-color: var(--bad); background: rgba(231,76,60,.12); }
+  .mode-btn.background.active { color: var(--info); border-color: var(--info); background: rgba(74,168,255,.12); }
+  .region-info { color: var(--muted); font-size: 12px; margin: 6px 0 8px; min-height: 34px; }
+  .region-info b { color: var(--text); }
+  .replay-btn {
+    background: transparent; color: var(--info); border: 1px solid var(--info);
+    border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+    margin-top: 8px;
+  }
+  .band-row input[type=number] {
+    width: 92px; padding: 8px 10px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .compare-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+  .side-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .side-card h4 { margin: 0 0 8px; font-size: 14px; }
+  .side-card .metric { display: flex; justify-content: space-between; padding: 3px 0; color: var(--muted); }
+  .side-card .metric b { color: var(--text); }
+  .side-card .elapsed { font-size: 22px; font-weight: 700; color: var(--info); }
+  .side-card.slower { border-color: var(--warn); }
+  .side-card.slower .elapsed { color: var(--warn); }
+  .common-level {
+    margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+    background: rgba(74,168,255,.1); border: 1px solid var(--info); color: #a9d3ff;
+  }
+  @media (max-width: 820px) { .upload-grid, .two-col, .compare-stats { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <header>
   <h1>冲压机冲次声音核对</h1>
-  <p>上传正常循环与待检循环录音（16 kHz / 16-bit PCM / 单声道 WAV，≤ 8 秒），系统按参考节奏自动核对漏冲与多冲。点击波形或表格时刻可定位播放。</p>
+  <p>上传正常循环与待检循环录音（16 kHz / 16-bit PCM / 单声道 WAV，≤ 8 秒），系统按参考节奏自动核对漏冲与多冲。点击波形或表格时刻可定位播放。下方可对比维修前后冲击尾音的衰减速度。</p>
 </header>
 <main>
   <section class="panel">
@@ -163,6 +195,105 @@
       </div>
     </div>
     <p class="empty" style="margin-top:14px">说明：每次漏冲只标注对应参考冲次，后续冲次按参考序号继续对齐，不会整体错位；40ms 内回声已在检测阶段剔除，不计多冲。</p>
+  </section>
+
+  <section id="comparePanel" class="panel">
+    <h2 style="margin:0 0 4px;font-size:17px">维修前后尾音衰减对比</h2>
+    <p class="empty" style="margin:0 0 14px">
+      上传维修前后各一份 WAV，为每份圈定一次冲击连同尾音的时段（红色）和一段无冲击背景声（蓝色），填入同一个待测频带。
+      系统以各冲击时段峰值为 0 dB、背景段能量中位数为底噪，比较两份尾音衰减到同一电平所需的时间。
+    </p>
+    <div class="upload-grid">
+      <div class="upload-box">
+        <label for="beforeFile">维修前录音</label>
+        <input id="beforeFile" type="file" accept=".wav,audio/wav" />
+        <div class="hint" id="beforeHint"></div>
+      </div>
+      <div class="upload-box">
+        <label for="afterFile">维修后录音</label>
+        <input id="afterFile" type="file" accept=".wav,audio/wav" />
+        <div class="hint" id="afterHint"></div>
+      </div>
+    </div>
+
+    <div class="band-row row">
+      <label>待测频带（Hz）：
+        <input id="bandLow" type="number" min="1" step="1" placeholder="500" value="500" />
+        ～
+        <input id="bandHigh" type="number" min="1" step="1" placeholder="4000" value="4000" />
+      </label>
+    </div>
+
+    <div class="two-col" style="margin-top:10px">
+      <div>
+        <h3>维修前录音 — 圈定时段</h3>
+        <div class="mode-row" data-side="before">
+          <button class="mode-btn impact active" data-mode="impact">画冲击+尾音</button>
+          <button class="mode-btn background" data-mode="background">画背景声</button>
+          <button class="mode-btn" data-mode="clear">清除</button>
+        </div>
+        <canvas id="beforeCanvas" class="compare-canvas"></canvas>
+        <div class="region-info" id="beforeInfo"></div>
+        <audio id="beforeAudio" controls preload="metadata"></audio>
+      </div>
+      <div>
+        <h3>维修后录音 — 圈定时段</h3>
+        <div class="mode-row" data-side="after">
+          <button class="mode-btn impact active" data-mode="impact">画冲击+尾音</button>
+          <button class="mode-btn background" data-mode="background">画背景声</button>
+          <button class="mode-btn" data-mode="clear">清除</button>
+        </div>
+        <canvas id="afterCanvas" class="compare-canvas"></canvas>
+        <div class="region-info" id="afterInfo"></div>
+        <audio id="afterAudio" controls preload="metadata"></audio>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="compareBtn" disabled>开始对比</button>
+      <span id="compareBusy" class="empty" style="display:none">分析中…</span>
+    </div>
+  </section>
+
+  <div id="compareError"></div>
+
+  <section id="compareResult" class="panel" style="display:none">
+    <div class="verdict">
+      <h2 style="margin:0;font-size:17px">衰减对比结论</h2>
+      <span id="slowerBadge" class="badge ok"></span>
+    </div>
+    <div id="commonLevel" class="common-level"></div>
+    <div class="compare-stats">
+      <div class="side-card" id="beforeCard">
+        <h4>维修前</h4>
+        <div class="elapsed" id="beforeElapsed"></div>
+        <div class="metric"><span>−5 dB 计时起点</span><b id="beforeStart"></b></div>
+        <div class="metric"><span>共用电平终点</span><b id="beforeEnd"></b></div>
+        <div class="metric"><span>底噪（相对峰值）</span><b id="beforeNoise"></b></div>
+        <div class="metric"><span>测量截止</span><b id="beforeGate"></b></div>
+        <button class="replay-btn" id="beforeReplay">从测量起点复听 ▶</button>
+      </div>
+      <div class="side-card" id="afterCard">
+        <h4>维修后</h4>
+        <div class="elapsed" id="afterElapsed"></div>
+        <div class="metric"><span>−5 dB 计时起点</span><b id="afterStart"></b></div>
+        <div class="metric"><span>共用电平终点</span><b id="afterEnd"></b></div>
+        <div class="metric"><span>底噪（相对峰值）</span><b id="afterNoise"></b></div>
+        <div class="metric"><span>测量截止</span><b id="afterGate"></b></div>
+        <button class="replay-btn" id="afterReplay">从测量起点复听 ▶</button>
+      </div>
+    </div>
+    <ul class="warnings" id="compareWarnings"></ul>
+    <div class="two-col" style="margin-top:12px">
+      <div>
+        <h3>维修前波形（红=冲击+尾音时段，蓝=背景时段，虚线=共用终点）</h3>
+        <canvas id="beforeCompareCanvas" class="compare-canvas"></canvas>
+      </div>
+      <div>
+        <h3>维修后波形（红=冲击+尾音时段，蓝=背景时段，虚线=共用终点）</h3>
+        <canvas id="afterCompareCanvas" class="compare-canvas"></canvas>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -285,11 +416,27 @@ function seekAndPlay(audio, t) {
 async function decodeWav(url) {
   const buf = await fetch(url).then((x) => x.arrayBuffer());
   const view = new DataView(buf);
+  if (view.byteLength < 12) throw new Error("文件过短，不是有效 WAV");
   let offset = 12;
+  let fmt = null;
   while (offset < view.byteLength - 8) {
     const id = String.fromCharCode(...new Uint8Array(buf, offset, 4));
     const size = view.getUint32(offset + 4, true);
+    if (id === "fmt " && size >= 16) {
+      fmt = {
+        channels: view.getUint16(offset + 10, true),
+        sampleRate: view.getUint32(offset + 12, true),
+        bits: view.getUint16(offset + 22, true),
+      };
+    }
     if (id === "data") {
+      if (!fmt) throw new Error("WAV 缺少 fmt 块");
+      if (fmt.channels !== 1 || fmt.bits !== 16 || fmt.sampleRate !== 16000) {
+        throw new Error(
+          `只支持 16 kHz / 16-bit / 单声道，当前为 ${fmt.sampleRate} Hz / ` +
+          `${fmt.bits}-bit / ${fmt.channels} 声道`
+        );
+      }
       const pcm = new Int16Array(buf, offset + 8, Math.floor(size / 2));
       return new Float32Array(pcm).map((v) => v / 32768);
     }
@@ -397,6 +544,370 @@ async function loadPeaks(url, duration, canvasId, audioId, impacts, extraMarkers
     }
   } catch (_) { /* 首次访问无结果，忽略 */ }
 })();
+
+// ================= 维修前后尾音衰减对比 =================
+const compare = {
+  before: { file: null, url: null, samples: null, duration: 0, impact: null, background: null, mode: "impact" },
+  after:  { file: null, url: null, samples: null, duration: 0, impact: null, background: null, mode: "impact" },
+  dragging: null, // {side, start, current}
+  result: null,
+};
+
+const SIDE_LABEL = { before: "维修前", after: "维修后" };
+
+function sideState(side) { return compare[side]; }
+
+async function loadCompareFile(side, file) {
+  const s = sideState(side);
+  if (s.url) URL.revokeObjectURL(s.url);
+  s.file = file;
+  s.samples = null;
+  s.impact = null;
+  s.background = null;
+  $(side + "Hint").textContent = file ? file.name : "";
+  if (!file) {
+    $(side + "Audio").removeAttribute("src");
+    redrawRegions(side);
+    refreshCompareBtn();
+    return;
+  }
+  s.url = URL.createObjectURL(file);
+  $(side + "Audio").src = s.url;
+  try {
+    s.samples = await decodeWav(s.url);
+    s.duration = s.samples.length / 16000;
+    $(side + "Info").innerHTML = "整段 " + s.duration.toFixed(2) + "s，在波形上按住拖动即可圈定。";
+  } catch (e) {
+    s.samples = null;
+    $(side + "Info").textContent = "无法读取该 WAV：" + e.message;
+  }
+  redrawRegions(side);
+  refreshCompareBtn();
+}
+
+$("beforeFile").addEventListener("change", () => loadCompareFile("before", $("beforeFile").files[0]));
+$("afterFile").addEventListener("change", () => loadCompareFile("after", $("afterFile").files[0]));
+
+document.querySelectorAll(".mode-row").forEach((row) => {
+  const side = row.dataset.side;
+  row.querySelectorAll(".mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      if (mode === "clear") {
+        sideState(side).impact = null;
+        sideState(side).background = null;
+        redrawRegions(side);
+        refreshCompareBtn();
+        return;
+      }
+      sideState(side).mode = mode;
+      row.querySelectorAll(".mode-btn").forEach((b) => {
+        if (b.dataset.mode !== "clear") b.classList.toggle("active", b === btn);
+      });
+    });
+  });
+});
+
+function timeAt(canvas, clientX, side) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  return ratio * sideState(side).duration;
+}
+
+["before", "after"].forEach((side) => {
+  const canvas = $(side + "Canvas");
+  canvas.addEventListener("mousedown", (e) => {
+    const s = sideState(side);
+    if (!s.samples) return;
+    const t = timeAt(canvas, e.clientX, side);
+    compare.dragging = { side, start: t, current: t };
+    e.preventDefault();
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    if (!compare.dragging || compare.dragging.side !== side) return;
+    compare.dragging.current = timeAt(canvas, e.clientX, side);
+    redrawRegions(side);
+  });
+  canvas.addEventListener("mouseup", (e) => {
+    const drag = compare.dragging;
+    if (!drag || drag.side !== side) return;
+    compare.dragging = null;
+    const t = timeAt(canvas, e.clientX, side);
+    const start = Math.min(drag.start, t);
+    const end = Math.max(drag.start, t);
+    const s = sideState(side);
+    if (end - start < 0.02) {
+      // 视为点击定位播放
+      seekAndPlay($(side + "Audio"), start);
+      redrawRegions(side);
+      return;
+    }
+    if (s.mode === "background") s.background = { start, end };
+    else s.impact = { start, end };
+    redrawRegions(side);
+    refreshCompareBtn();
+    updateRegionInfo(side);
+  });
+  canvas.addEventListener("mouseleave", () => {
+    if (compare.dragging && compare.dragging.side === side) {
+      compare.dragging = null;
+      redrawRegions(side);
+    }
+  });
+});
+
+function updateRegionInfo(side) {
+  const s = sideState(side);
+  const fmt = (r) => (r ? `${r.start.toFixed(2)}–${r.end.toFixed(2)}s` : "未圈定");
+  $(side + "Info").innerHTML =
+    `冲击+尾音：<b>${fmt(s.impact)}</b>　背景声：<b>${fmt(s.background)}</b>`;
+}
+
+function refreshCompareBtn() {
+  const ready = ["before", "after"].every((side) => {
+    const s = sideState(side);
+    return s.file && s.samples && s.impact && s.background;
+  });
+  const low = parseFloat($("bandLow").value);
+  const high = parseFloat($("bandHigh").value);
+  $("compareBtn").disabled = !(ready && low > 0 && high > low);
+}
+
+["bandLow", "bandHigh"].forEach((id) => {
+  $(id).addEventListener("input", refreshCompareBtn);
+});
+
+function drawRegionWave(canvas, s, opts = {}) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const H = opts.height || 84;
+  canvas.width = cssW * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, H);
+  ctx.fillStyle = "#0f1419";
+  ctx.fillRect(0, 0, cssW, H);
+  if (!s.samples || !s.duration) return;
+
+  const W = cssW;
+  const xOf = (t) => (t / s.duration) * W;
+  const paintRegion = (r, fill, stroke) => {
+    if (!r) return;
+    const x0 = xOf(Math.min(r.start, r.end));
+    const x1 = xOf(Math.max(r.start, r.end));
+    ctx.fillStyle = fill;
+    ctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + 0.5, 0.5, Math.max(1, x1 - x0 - 1), H - 1);
+  };
+  paintRegion(s.impact, "rgba(231,76,60,.18)", "rgba(231,76,60,.7)");
+  paintRegion(s.background, "rgba(74,168,255,.18)", "rgba(74,168,255,.7)");
+
+  const n = s.samples.length;
+  const bars = Math.max(60, Math.min(W, 600));
+  const step = Math.max(1, Math.floor(n / bars));
+  ctx.strokeStyle = "#3d4c63";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let b = 0; b < bars; b++) {
+    let mx = 0;
+    for (let i = b * step; i < Math.min(n, (b + 1) * step); i++) {
+      const v = Math.abs(s.samples[i]);
+      if (v > mx) mx = v;
+    }
+    const x = (b / bars) * W;
+    const h = Math.max(1, mx * H * 0.86);
+    ctx.moveTo(x, H / 2 - h / 2);
+    ctx.lineTo(x, H / 2 + h / 2);
+  }
+  ctx.stroke();
+
+  if (compare.dragging && compare.dragging.side === opts.side) {
+    const x0 = xOf(Math.min(compare.dragging.start, compare.dragging.current));
+    const x1 = xOf(Math.max(compare.dragging.start, compare.dragging.current));
+    ctx.strokeStyle = "#e6edf3";
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0 + 0.5, 1, Math.max(1, x1 - x0 - 1), H - 2);
+    ctx.setLineDash([]);
+  }
+
+  const audio = $(opts.side + "Audio");
+  if (audio && audio.currentTime) {
+    ctx.strokeStyle = "#4aa8ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xOf(audio.currentTime), 0);
+    ctx.lineTo(xOf(audio.currentTime), H);
+    ctx.stroke();
+  }
+}
+
+function redrawRegions(side) {
+  const canvas = $(side + "Canvas");
+  if (!canvas) return;
+  drawRegionWave(canvas, sideState(side), { side });
+  updateRegionInfo(side);
+}
+
+["before", "after"].forEach((side) => {
+  const audio = $(side + "Audio");
+  audio.addEventListener("timeupdate", () => redrawRegions(side));
+  audio.addEventListener("seeked", () => redrawRegions(side));
+  audio.addEventListener("pause", () => redrawRegions(side));
+});
+
+function showCompareError(msg) {
+  const el = $("compareError");
+  el.textContent = "✗ " + msg + (compare.result ? "（旧对比已撤下）" : "");
+  el.style.display = "block";
+  if (compare.result) {
+    compare.result = null;
+    $("compareResult").style.display = "none";
+  }
+}
+
+$("compareBtn").addEventListener("click", async () => {
+  const b = sideState("before");
+  const a = sideState("after");
+  const fd = new FormData();
+  fd.append("before", b.file);
+  fd.append("after", a.file);
+  fd.append("band_low_hz", $("bandLow").value);
+  fd.append("band_high_hz", $("bandHigh").value);
+  fd.append("before_impact_start", b.impact.start);
+  fd.append("before_impact_end", b.impact.end);
+  fd.append("before_background_start", b.background.start);
+  fd.append("before_background_end", b.background.end);
+  fd.append("after_impact_start", a.impact.start);
+  fd.append("after_impact_end", a.impact.end);
+  fd.append("after_background_start", a.background.start);
+  fd.append("after_background_end", a.background.end);
+
+  $("compareError").style.display = "none";
+  $("compareBusy").style.display = "inline";
+  $("compareBtn").disabled = true;
+  try {
+    const resp = await fetch("/api/compare", { method: "POST", body: fd });
+    const payload = await resp.json();
+    if (!resp.ok) {
+      showCompareError(payload.detail || "对比失败");
+      return;
+    }
+    compare.result = payload;
+    renderCompare(payload);
+  } catch (e) {
+    showCompareError("请求失败：" + e.message);
+  } finally {
+    $("compareBusy").style.display = "none";
+    refreshCompareBtn();
+  }
+});
+
+function renderCompare(r) {
+  $("compareResult").style.display = "block";
+  const badge = $("slowerBadge");
+  if (r.slower) {
+    badge.className = "badge ambiguous";
+    badge.textContent = (r.slower === "after" ? "维修后" : "维修前") + "衰减更慢（尾音拖得更长）";
+  } else {
+    badge.className = "badge ok";
+    badge.textContent = "两份衰减耗时相同";
+  }
+
+  const lvl = r.common_level_db;
+  const lvlText = `−${Math.abs(lvl)} dB`;
+  $("commonLevel").innerHTML =
+    `共用测量范围：<b>−5 dB → ${lvlText}</b>　` +
+    `（在 −15～−25 dB 之间取双方都能测到的最深整 dB 电平）`;
+  const sides = [["before", r.before], ["after", r.after]];
+  for (const [side, d] of sides) {
+    const label = SIDE_LABEL[side];
+    $(side + "Elapsed").textContent = d.elapsed.toFixed(3) + " s";
+    $(side + "Start").textContent = d.start_time.toFixed(3) + " s（−5 dB 过线）";
+    $(side + "End").textContent = `${d.end_time.toFixed(3)} s（${lvlText}）`;
+    $(side + "Noise").textContent = d.noise_floor_db.toFixed(1) + " dB";
+    $(side + "Gate").textContent = d.gate_time == null
+      ? "冲击时段窗末"
+      : `${d.gate_time.toFixed(3)} s（高出底噪不足 6 dB）`;
+    const card = $(side + "Card");
+    card.classList.toggle("slower", r.slower === side);
+    card.querySelector("h4").textContent =
+      label + (r.slower === side ? " — 衰减更慢" : "");
+    $(side + "Replay").onclick = () => seekTo($(side + "Audio"), d.start_time);
+    // 结果里的音频地址换为服务端保存的录音
+    $(side + "Audio").src = d.url + "?t=" + r.id;
+  }
+  $("compareWarnings").innerHTML = (r.warnings || []).map((w) => `<li>${w}</li>`).join("");
+
+  // 结果波形：复用本地样本，叠加共用终点线；恢复旧结果时没有本地样本则跳过
+  const localBefore = sideState("before").samples;
+  const localAfter = sideState("after").samples;
+  $("beforeCompareCanvas").style.display = localBefore ? "block" : "none";
+  $("afterCompareCanvas").style.display = localAfter ? "block" : "none";
+  if (localBefore) {
+    drawRegionWave($("beforeCompareCanvas"), sideState("before"), { side: "before" });
+    drawLevelLine($("beforeCompareCanvas"), r.before.end_time, sideState("before").duration);
+  }
+  if (localAfter) {
+    drawRegionWave($("afterCompareCanvas"), sideState("after"), { side: "after" });
+    drawLevelLine($("afterCompareCanvas"), r.after.end_time, sideState("after").duration);
+  }
+}
+
+function seekTo(audio, t) {
+  audio.currentTime = Math.max(0, t);
+  audio.play().catch(() => {});
+}
+
+function drawLevelLine(canvas, t, duration) {
+  if (!duration) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.width / dpr;
+  const H = canvas.height / dpr;
+  const x = (t / duration) * cssW;
+  ctx.strokeStyle = "#4aa8ff";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#4aa8ff";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText("共用终点", Math.min(x + 4, cssW - 52), 14);
+}
+
+window.addEventListener("resize", () => {
+  ["before", "after"].forEach((side) => redrawRegions(side));
+  if (compare.result) {
+    if (sideState("before").samples) {
+      drawRegionWave($("beforeCompareCanvas"), sideState("before"), { side: "before" });
+      drawLevelLine($("beforeCompareCanvas"), compare.result.before.end_time, sideState("before").duration);
+    }
+    if (sideState("after").samples) {
+      drawRegionWave($("afterCompareCanvas"), sideState("after"), { side: "after" });
+      drawLevelLine($("afterCompareCanvas"), compare.result.after.end_time, sideState("after").duration);
+    }
+  }
+});
+
+// 恢复上一次有效的衰减对比（旧结果使用服务端保存的录音，波形图仅在有本地样本时绘制）
+(async () => {
+  try {
+    const resp = await fetch("/api/comparison/last");
+    if (resp.ok) {
+      const r = await resp.json();
+      compare.result = r;
+      renderCompare(r);
+    }
+  } catch (_) { /* 无旧结果，忽略 */ }
+})();
+
 </script>
 </body>
 </html>

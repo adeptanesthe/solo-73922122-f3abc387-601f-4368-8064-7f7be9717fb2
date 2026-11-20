@@ -2,6 +2,8 @@
 
 值班员上传**正常循环参考录音**与**待检循环录音**，系统从音频中提取冲击并按参考节奏匹配，自动标出**漏冲对应的参考冲次**与**多冲的实录时刻**，网页可定位播放标出的时段。
 
+同一页面还提供**维修前后尾音衰减对比**：上传维修前后各一份 WAV，圈定冲击+尾音时段与无冲击背景段，比较两份尾音衰减到同一电平所需的时间。
+
 ## 输入约定
 
 - WAV（PCM）：16 kHz、16-bit、单声道，单个文件不超过 8 秒
@@ -16,6 +18,23 @@
 4. **漏冲不错位**：漏冲只计一次成本，后续冲次仍按参考序号继续对齐，不会整体错位。
 5. **歧义人工复听**：若多种归属具有相同的最优成本（同样满足节奏与最少漏/多冲），返回 `ambiguous`，网页给出醒目提示，不武断放行。
 6. **无效音频不覆盖结果**：格式/时长/参考质量不合格时返回 400 且不写入状态，上一次有效结果原样保留。
+
+## 维修前后尾音衰减对比
+
+每份录音圈定两段（网页在波形上拖拽即可）：
+
+- **冲击+尾音时段**：段内最强一帧作为 0 dB 峰值；
+- **无冲击背景段**：段内频带能量的中位数作为底噪（段内峰值须至少比冲击峰值低 6 dB，否则判为圈到了冲击）。
+
+两份录音填入**同一个待测频带**。测量规则：
+
+1. **短时频带能量**：10 ms Hann 帧、5 ms 帧移，把待测频带内各 FFT 频点功率求和。
+2. **峰后截止**：只测到冲击时段窗末，或首个高出底噪不足 6 dB 的帧之前（二者取先到者）。
+3. **过线**：连续 3 帧不高于目标电平才算过线，过线时刻取这 3 帧中的**第一帧**。
+4. **计时起点**：两份录音都从各自的 −5 dB 过线时刻起算。
+5. **共用终点**：在 −15～−25 dB 之间取**双方都能测到的最深整 dB** 电平；该电平的过线时刻须晚于各自起点。
+6. **结果**：网页显示共用的电平范围与各自耗时（终点 − 起点），标注衰减更慢的一份，并可从各自测量起点复听。
+7. **条件不足**：任一份录音/圈定不合格，或找不到共同可测的终点，返回 400、**撤下旧对比**并说明原因；冲次核对结果不受影响。参数缺失或格式错误同样按此处理。
 
 ## 启动（Docker Compose）
 
@@ -41,10 +60,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `POST` | `/api/inspect` | multipart 表单字段 `reference`、`test`（均为 .wav），返回核对结果 |
 | `GET` | `/api/result/last` | 最近一次有效结果（无结果时 404） |
 | `DELETE` | `/api/result/last` | 清除内存中的最近结果 |
+| `POST` | `/api/compare` | 维修前后衰减对比：文件字段 `before`、`after`，表单字段 `band_low_hz`、`band_high_hz`，以及 `{before,after}_{impact,background}_{start,end}` |
+| `GET` | `/api/comparison/last` | 最近一次有效衰减对比（无结果时 404） |
+| `DELETE` | `/api/comparison/last` | 撤下当前对比结果 |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/data/uploads/{name}` | 回传已上传录音，供网页播放器定位播放 |
 
 结果关键字段：`verdict`（`ok` / `defect` / `ambiguous`）、`missed[].ref_index`（漏冲对应的参考冲次，从 0 开始）、`missed[].expected_time`（待检中预计应出现的时刻）、`extras[].time`（多充实录时刻）、`matches`（匹配明细）、`warnings`（回声抑制、歧义等提示）。
+
+对比结果关键字段：`common_level_db`（共用终点电平，整 dB）、`before` / `after` 各自的 `start_time`（−5 dB 过线）、`end_time`（共用终点过线）、`elapsed`（耗时）、`noise_floor_db`（底噪，相对峰值）、`gate_time`（因底噪 6 dB 截止的时刻，`null` 表示测到窗末）、`slower`（`before` / `after` / `null`）。
 
 ## 测试
 
@@ -52,7 +76,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 python3 -m pytest tests/ -q
 ```
 
-合成 WAV 生成器见 `scripts/gen_demo.py`，可用于手工演示：
+合成 WAV 生成器见 `scripts/gen_demo.py`，可用于手工演示（含 `tail_before.wav` / `tail_after.wav` 两份衰减对比录音）：
 
 ```bash
 python3 scripts/gen_demo.py /tmp/demo
@@ -64,9 +88,10 @@ python3 scripts/gen_demo.py /tmp/demo
 app/
   audio.py       WAV 校验与冲击检测
   matching.py    节奏匹配动态规划（漏冲/多冲/歧义）
-  service.py     检查服务与结果存储（无效输入不覆盖旧结果）
+  decay.py       维修前后尾音衰减测量（短时频带能量、过线、共用终点）
+  service.py     检查/对比服务与结果存储（无效输入不覆盖旧核对结果，对比失败撤下旧对比）
   main.py        FastAPI 路由
-  static/        单页前端（上传、波形标注、点击定位播放）
-tests/           检测、匹配、端到端 API 测试（28 项）
+  static/        单页前端（上传、波形标注、点击定位播放、圈定与衰减对比）
+tests/           检测、匹配、衰减、端到端 API 测试（43 项）
 scripts/         演示 WAV 生成
 ```
